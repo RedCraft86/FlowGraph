@@ -1,6 +1,7 @@
 {
 	"FileVersion" : 3,
-	"Version" : 2.4,
+	"Version" : 2,
+	"VersionName": "2.4",
 	"FriendlyName" : "Flow",
 	"Description" : "Design-agnostic node editor for scripting game’s flow.",
 	"Category" : "Gameplay",
@@ -8,7 +9,7 @@
 	"DocsURL" : "https://mothcocoon.github.io/FlowGraph/",
 	"MarketplaceURL" : "",
 	"SupportURL": "https://discord.gg/Xmtr6GhbmW",
-	"EnabledByDefault" : false,
+	"EnabledByDefault" : true,
 	"CanContainContent" : false,
 	"IsBetaVersion" : false,
 	"Installed" : false,

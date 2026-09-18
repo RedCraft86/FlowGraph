@@ -9,10 +9,10 @@
 	"DocsURL" : "https://mothcocoon.github.io/FlowGraph/",
 	"MarketplaceURL" : "",
 	"SupportURL": "https://discord.gg/Xmtr6GhbmW",
-	"EnabledByDefault" : false,
+	"EnabledByDefault" : true,
 	"CanContainContent" : false,
 	"IsBetaVersion" : false,
-	"Installed" : false,
+	"Installed" : true,
 	"Modules" :
 	[
 		{

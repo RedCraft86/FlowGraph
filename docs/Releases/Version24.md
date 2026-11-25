@@ -4,7 +4,7 @@ title: Flow 2.4 (work in progress)
 
 This is the upcoming release. This page is updated regularly after changes are pushed to the repository.
 
-This release includes pull requests from the community: AMBXJianPing (Fong Jian Ping), Bargestt (Vasilii Bulgakov), CyaDaPaKnat, dskliarov-gsc, dyanikoglu (Doğa Can Yanıkoğlu), fcarreiro (Facundo), fede-Raider (Federico Ciardi), LindyHopperGT (Riot Games), Maksym Kapelianovych, northstarswap, omarchuk-gsc.
+This release includes pull requests from the community: AMBXJianPing (Fong Jian Ping), Bargestt (Vasilii Bulgakov), CyaDaPaKnat, DAE-FriesB (Fries Boury), dskliarov-gsc, dyanikoglu (Doğa Can Yanıkoğlu), fcarreiro (Facundo), fede-Raider (Federico Ciardi), LindyHopperGT (Riot Games), Maksym Kapelianovych, northstarswap, omarchuk-gsc.
 
 This is the first release for UE 5.9.
 
@@ -16,12 +16,20 @@ Version 2.2 came with a huge Data Pins refactor, and it requires data migration 
 * Resave all Flow Graph assets.
 * Then update to the newer Flow Graph version.
 
+The original Data Pins implementation and its automatic migration are now removed.
+* Replace `FFlowDataPinInputProperty_*` and `FFlowDataPinOutputProperty_*` with `FFlowDataPinValue_*`.
+* Replace `TryResolveDataPinAs*` and typed `FFlowDataPinResult_*` with `TryResolveDataPinValue` / `TryResolveDataPinValues` and `FFlowDataPinResult`.
+* Use registered `FFlowPinTypeName` types instead of `EFlowPinType` and the removed `FFlowPin::PinType` field.
+* Assets must already use the revised value types; loading this release no longer upgrades original data pins.
+
 ### Changes potentially breaking C++ compilation
 * The `ActivationState` property of Flow Asset is now private. Access it through the `GetActivationState()` getter.
 * Changed the Flow Graph Node constructor to GENERATED_BODY.
     * This is a breaking change if you have custom UFlowGraphNode classes. Updating the code is trivial though.
 * Detail Customizations are now organized into subfolders.
     * This is a breaking change if you made changes to these classes.
+* Removed the deprecated `EFlowNodeStyle` enum, the `UFlowNodeBase::NodeStyle` property and `UFlowGraphSettings::NodeTitleColors`, replaced by `NodeDisplayStyle` tags in Flow 2.0. Nodes no longer run the conversion on every load.
+    * Assets not resaved since Flow 2.0 lose their node style. Resave them before upgrading.
 
 ### By default, Data Validation runs on saving a Flow Asset
 This is the result of hooking up Flow Asset validation to the engine's built-in validation. Thanks to this, many issues can be detected early on.
@@ -30,6 +38,11 @@ However, this might be annoying to users.
 * You can disable this in a specific `UFlowAsset` subclass by overriding the `ShouldValidateOnSave()` method.
 
 ## Flow Asset
+* New feature: Fast Forward to Here! It saves the time spent on reproducing bugs that require playing a part of the game first.
+    * You can find this option in the node context menu during PIE, in the `Execution Override` section.
+    * The route of the signal is found from the nearest active node to the chosen node, also across SubGraphs. The game is pushed along this route: nodes execute their logic, only waiting for player actions or passing time is skipped.
+    * Nodes can customize this through the new `FastForwardInput` and `CanFastForward` methods. Play Level Sequence, Timer and nodes observing components already implement it.
+    * This is an early implementation. See the [Fast Forward](../Debugging/FastForward.html) page for details and known limitations.
 * Saving graph state to SaveGame now iterates nodes connected to Custom Inputs. Previously, the code only iterated over nodes connected to the Start node. (contributed by dskliarov-gsc)
 * New feature: Create a SubGraph asset from selected nodes! (contributed by LindyHopperGT)
     * You can find this new option in the node context menu, in the `Organization` section.
@@ -74,6 +87,7 @@ However, this might be annoying to users.
     * This is used to provide a convenient actor picker on Flow Nodes.
     * The struct needs to be manually added to a Flow Node class and read by the node's logic.
 * Added a PIE world context guard during `ForcePinActivation`. This fixes issues with nodes spawning actors in the wrong (editor) world. (contributed by CyaDaPaKnat)
+* `FlowAssetIndexer` now indexes the template node (the node stored in the asset) by using `UFlowGraphNode::GetTemplateNode()` instead of the inspected node instance. This fixes ensures caused by stale node information saved for Asset Search. (contributed by DAE-FriesB)
 * `GetNodeTitle()` and `GetNodeDescription()` are now called on node instances only when displaying actual node instances. This allows us to preserve the default title and description for the archetype (e.g. in the node selection list). (contributed by LindyHopperGT)
 * Node descriptions have been revamped and greatly improved. (contributed by LindyHopperGT)
 * Added documentation methods for LLM agents. All nodes now implement `GetAgentDoc()`. (contributed by LindyHopperGT)
@@ -101,6 +115,9 @@ However, this might be annoying to users.
     * Components injected into actors can now be shared between a SubGraph and its parent graphs. Such a component is removed only after its last user releases it. (contributed by LindyHopperGT)
 * The `PlayLevelSequence` node now supports multiplayer via a replicated binding on `AFlowLevelSequenceActor`. (contributed by LindyHopperGT)
 * `OnNotifyFromActor` now has a `bExactMatch` flag, allowing users to choose how the `NotifyTag` should be matched. It's similar to the `NotifyActor` node. (contributed by fede-Raider)
+* Fixed case of `MultiGate` dropping the input looped back from its last output.
+    * With Loop enabled, the gate finishes before triggering the last output of the cycle, so an input wired back from it starts a new cycle.
+* Fixed `Timer` status (a debug display) for node loaded from the SaveGame. (contributed by dskliarov-gsc)
 * Placing a Comment node immediately starts editing its text. This saves users the extra action of selecting the Comment node.
 
 ## Flow Component
@@ -123,3 +140,12 @@ However, this might be annoying to users.
     * As a general rule, runtime properties shouldn't use TSubclassOf, which is a hard reference.
 * Fixed the `GetObjectsWithOuter` call in `RemoveOrphanedNodes` for UE 5.8. (contributed by fcarreiro)
 * Fixed `-Wunreachable-code-loop-increment` errors on Clang. (based on a changelist by northstarswap)
+
+## Documentation
+The documentation has been revamped.
+* Feature pages are split into the Runtime, Debugging and Editing sections, so it's easier to find the right page. Links to the former `Features` pages need updating.
+* Images are stored in the repository, so the documentation can be read offline. Previously, images were hosted on GitHub servers.
+* Pages were checked against the current code and updated. Notably, Generic Gameplay Tag Events now correctly states that Notify Tags are required to send a notify, and the Search page covers both the Search in the Flow Asset editor and the engine's Asset Search.
+* The Plugins page lists all official plugins extending Flow Graph.
+* How To Contribute explains how to add images and preview the documentation locally.
+* Removed the outdated Notable Pull Requests page.

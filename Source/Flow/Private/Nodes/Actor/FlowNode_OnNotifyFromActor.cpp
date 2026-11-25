@@ -56,14 +56,31 @@ void UFlowNode_OnNotifyFromActor::OnNotifyFromComponent(UFlowComponent* Componen
 	}
 }
 
+void UFlowNode_OnNotifyFromActor::FastForwardEvent()
+{
+	UFlowComponent* NotifyingComponent = nullptr;
+	for (const TPair<TWeakObjectPtr<AActor>, TWeakObjectPtr<UFlowComponent>>& RegisteredActor : RegisteredActors)
+	{
+		if (NotifyingComponent == nullptr)
+		{
+			NotifyingComponent = RegisteredActor.Value.Get();
+		}
+	}
+
+	// Observed actor sends the notify itself, so other graphs and actors receive it too
+	const FGameplayTag NotifyTag = NotifyTags.First();
+	if (NotifyingComponent && NotifyTag.IsValid())
+	{
+		NotifyingComponent->NotifyGraph(NotifyTag);
+	}
+}
+
 #if WITH_EDITOR
 FString UFlowNode_OnNotifyFromActor::GetNodeDescription() const
 {
 	return GetIdentityTagsDescription(IdentityTags) + LINE_TERMINATOR + GetNotifyTagsDescription(NotifyTags);
 }
-#endif
 
-#if WITH_EDITOR
 const FFlowAgentDoc& UFlowNode_OnNotifyFromActor::GetAgentDoc() const
 {
 	static const FFlowAgentDoc Doc = MakeAgentDoc(

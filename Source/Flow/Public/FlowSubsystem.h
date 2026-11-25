@@ -95,7 +95,8 @@ protected:
 	void FinishSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlowFinishPolicy FinishPolicy, const bool bRemoveInstance);
 
 public:
-	/* bStartReplication registers the instance as a replicated subobject of Owner right after creation.
+	/* OwningFlowInstance supplies the parent whose root context the new instance should share.
+	 * bStartReplication registers the instance as a replicated subobject of Owner right after creation.
 	 * SubGraph instance starts replication on its activation instead, so a preloaded instance isn't sent to clients. */
 	UFlowAsset* CreateFlowInstance(const TWeakObjectPtr<UObject> Owner, UFlowAsset* LoadedFlowAsset, FString NewInstanceName = FString(), const bool bStartReplication = true, UFlowAsset* OwningFlowInstance = nullptr);
 
@@ -107,6 +108,9 @@ public:
 	/* Returns all assets instanced by object from another system like World Settings */
 	UFUNCTION(BlueprintPure, Category = "FlowSubsystem")
 	TMap<UObject*, UFlowAsset*> GetRootInstances() const;
+
+	/* Returns all assets instanced by objects from another system, including multiple instances started by the same object */
+	TArray<UFlowAsset*> GetAllRootInstances() const;
 
 	/* Returns asset instanced by specific object */
 	UFUNCTION(BlueprintPure, Category = "FlowSubsystem")

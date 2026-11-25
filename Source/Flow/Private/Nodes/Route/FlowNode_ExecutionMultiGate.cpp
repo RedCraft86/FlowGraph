@@ -63,7 +63,7 @@ void UFlowNode_ExecutionMultiGate::ExecuteInput(const FName& PinName)
 			}
 
 			Completed[Index] = true;
-			TriggerOutput(OutputPins[Index].PinName, false);
+			TriggerOutput(OutputPins[Index].PinName, bLoop && !Completed.Contains(false));
 		}
 		else
 		{
@@ -78,18 +78,44 @@ void UFlowNode_ExecutionMultiGate::ExecuteInput(const FName& PinName)
 			NextOutput = ++NextOutput % OutputPins.Num();
 
 			Completed[CurrentOutput] = true;
-			TriggerOutput(OutputPins[CurrentOutput].PinName, false);
-		}
-
-		if (!Completed.Contains(false) && bLoop)
-		{
-			Finish();
+			TriggerOutput(OutputPins[CurrentOutput].PinName, bLoop && !Completed.Contains(false));
 		}
 	}
 	else if (PinName == TEXT("Reset"))
 	{
 		Finish();
 	}
+}
+
+void UFlowNode_ExecutionMultiGate::FastForwardInput(const FName& PinName, const FName& OutputPinName)
+{
+	const int32 OutputIndex = OutputPins.IndexOfByKey(OutputPinName);
+
+	if (Completed.Num() == 0)
+	{
+		Completed.Init(false, OutputPins.Num());
+	}
+
+	if (Completed.IsValidIndex(OutputIndex))
+	{
+		ExecuteInputForAddOns(PinName);
+
+		// Route requires this output, whatever the order or randomness of the gate
+		Completed[OutputIndex] = true;
+		NextOutput = (OutputIndex + 1) % OutputPins.Num();
+		TriggerOutput(OutputPinName, bLoop && !Completed.Contains(false));
+	}
+	else
+	{
+		Super::FastForwardInput(PinName, OutputPinName);
+	}
+}
+
+bool UFlowNode_ExecutionMultiGate::CanFastForward(const FName& InputPinName, const FName& OutputPinName) const
+{
+	// Reset input finishes the gate without triggering any output, opened output doesn't open again until the gate finishes
+	const int32 OutputIndex = OutputPins.IndexOfByKey(OutputPinName);
+	return InputPinName != TEXT("Reset") && !(Completed.IsValidIndex(OutputIndex) && Completed[OutputIndex]);
 }
 
 void UFlowNode_ExecutionMultiGate::Cleanup()

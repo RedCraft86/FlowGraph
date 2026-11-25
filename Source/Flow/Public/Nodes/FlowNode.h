@@ -100,6 +100,9 @@ protected:
 	UPROPERTY()
 	EFlowSignalMode SignalMode = EFlowSignalMode::Enabled;
 
+public:
+	EFlowSignalMode GetSignalMode() const { return SignalMode; }
+
 //////////////////////////////////////////////////////////////////////////
 // All created pins (default, class-specific and added by user)
 
@@ -110,11 +113,11 @@ public:
 protected:
 	/* Class-specific and user-added inputs. */
 	UPROPERTY(EditDefaultsOnly, Category = "FlowNode")
-	TArray<FFlowPin> InputPins;
+	TArray<FFlowPin> InputPins = {DefaultInputPin};
 
 	/* Class-specific and user-added outputs. */
 	UPROPERTY(EditDefaultsOnly, Category = "FlowNode")
-	TArray<FFlowPin> OutputPins;
+	TArray<FFlowPin> OutputPins = {DefaultOutputPin};
 
 	void AddInputPins(const TArray<FFlowPin>& Pins);
 	void AddOutputPins(const TArray<FFlowPin>& Pins);
@@ -301,14 +304,6 @@ public:
 
 	bool TryGetFlowDataPinSupplierDatasForPinName(const FName& PinName, TFlowPinValueSupplierDataArray& InOutPinValueSupplierDatas) const;
 
-	// #FlowDataPinLegacy
-public:
-	void FixupDataPinTypes();
-
-protected:
-	static void FixupDataPinTypesForArray(TArray<FFlowPin>& MutableDataPinArray);
-	static void FixupDataPinTypesForPin(FFlowPin& MutableDataPin);
-	// --
 
 //////////////////////////////////////////////////////////////////////////
 // Data validation
@@ -349,7 +344,25 @@ public:
 	virtual void ExecuteInput(const FName& PinName) override;
 	// --
 
+	/* Reports the route broken, if the node finishes without triggering OutputPinName. */
+	void TriggerFastForwardInput(const FName& PinName, const FName& OutputPinName);
+
+protected:
+	/* Called instead of ExecuteInput while the game is fast forwarded along a route to the node chosen by user. */
+	virtual void FastForwardInput(const FName& PinName, const FName& OutputPinName);
+
+	/* True until the node triggers the output expected from the fast forwarded input. */
+	bool IsFastForwardOutputPending(const FName& OutputPinName) const { return PendingFastForwardOutputPinName == OutputPinName; }
+
+public:
+	/* Returns false if the signal received by InputPinName can't leave the node by OutputPinName.
+	 * InputPinName is None for the active node starting the route. */
+	virtual bool CanFastForward(const FName& InputPinName, const FName& OutputPinName) const { return true; }
+
 private:
+	/* Output expected from the fast forwarded input, until the node triggers it. */
+	FName PendingFastForwardOutputPinName = NAME_None;
+
 	UPROPERTY(SaveGame, ReplicatedUsing = OnRep_ActivationState)
 	EFlowNodeState ActivationState = EFlowNodeState::NeverActivated;
 

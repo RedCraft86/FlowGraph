@@ -25,9 +25,16 @@ private:
 public:
 #if WITH_EDITOR
 	virtual bool CanUserAddInput() const override { return true; }
+
+	virtual FString GetStatusString() const override;
 #endif
 
 	virtual void ExecuteInput(const FName& PinName) override;
+
+protected:
+	virtual void FastForwardInput(const FName& PinName, const FName& OutputPinName) override;
+
+public:
 	virtual void Cleanup() override;
 
 #if WITH_EDITOR

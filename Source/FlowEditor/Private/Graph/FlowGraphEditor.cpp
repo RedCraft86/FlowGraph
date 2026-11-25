@@ -9,9 +9,14 @@
 #include "Graph/Nodes/FlowGraphNode.h"
 
 #include "Debugger/FlowDebuggerSubsystem.h"
+#include "FlowSubsystem.h"
+#include "FastForward/FlowFastForwardRouteFinder.h"
+#include "FastForward/FlowFastForwardSubsystem.h"
 
 #include "EdGraphUtilities.h"
 #include "Editor/UnrealEdEngine.h"
+#include "Engine/GameInstance.h"
+#include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Commands/GenericCommands.h"
 #include "Framework/Notifications/NotificationManager.h"
@@ -37,6 +42,7 @@ void SFlowGraphEditor::Construct(const FArguments& InArgs, const TSharedPtr<FFlo
 	UFlowAsset* FlowAssetPtr =InAssetEditor->GetFlowAsset();
 	FlowAsset = FlowAssetPtr;
 	DetailsView = InArgs._DetailsView;
+	bCanEditInPIE = InArgs._CanEditInPIE;
 
 	DebuggerSubsystem = GEngine->GetEngineSubsystem<UFlowDebuggerSubsystem>();
 
@@ -103,7 +109,7 @@ void SFlowGraphEditor::BindGraphCommands()
 	// Graph commands
 	CommandList->MapAction(GraphEditorCommands.CreateComment,
 	                       FExecuteAction::CreateSP(this, &SFlowGraphEditor::OnCreateComment),
-	                       FCanExecuteAction::CreateStatic(&SFlowGraphEditor::CanEdit));
+	                       FCanExecuteAction::CreateSP(this, &SFlowGraphEditor::CanEdit));
 
 	CommandList->MapAction(GraphEditorCommands.StraightenConnections,
 	                       FExecuteAction::CreateSP(this, &SFlowGraphEditor::OnStraightenConnections));
@@ -115,11 +121,11 @@ void SFlowGraphEditor::BindGraphCommands()
 	// Generic Node commands
 	CommandList->MapAction(GenericCommands.Undo,
 	                       FExecuteAction::CreateStatic(&SFlowGraphEditor::UndoGraphAction),
-	                       FCanExecuteAction::CreateStatic(&SFlowGraphEditor::CanEdit));
+	                       FCanExecuteAction::CreateSP(this, &SFlowGraphEditor::CanEdit));
 
 	CommandList->MapAction(GenericCommands.Redo,
 	                       FExecuteAction::CreateStatic(&SFlowGraphEditor::RedoGraphAction),
-	                       FCanExecuteAction::CreateStatic(&SFlowGraphEditor::CanEdit));
+	                       FCanExecuteAction::CreateSP(this, &SFlowGraphEditor::CanEdit));
 
 	CommandList->MapAction(GenericCommands.SelectAll,
 	                       FExecuteAction::CreateSP(this, &SFlowGraphEditor::SelectAllNodes),
@@ -301,6 +307,13 @@ void SFlowGraphEditor::BindGraphCommands()
 	                       FIsActionButtonVisible::CreateStatic(&SFlowGraphEditor::IsPIE)
 	);
 
+	CommandList->MapAction(FlowGraphCommands.FastForwardToHere,
+	                       FExecuteAction::CreateSP(this, &SFlowGraphEditor::FastForwardToHere),
+	                       FCanExecuteAction::CreateSP(this, &SFlowGraphEditor::CanFastForwardToHere),
+	                       FIsActionChecked(),
+	                       FIsActionButtonVisible::CreateSP(this, &SFlowGraphEditor::CanFastForwardToHere)
+	);
+
 	// Jump commands
 	CommandList->MapAction(FlowGraphCommands.FocusViewport,
 	                       FExecuteAction::CreateSP(this, &SFlowGraphEditor::FocusViewport),
@@ -377,9 +390,9 @@ bool SFlowGraphEditor::IsTabFocused() const
 	return FlowAssetEditor.Pin()->IsTabFocused(FFlowAssetEditor::GraphTab);
 }
 
-bool SFlowGraphEditor::CanEdit()
+bool SFlowGraphEditor::CanEdit() const
 {
-	return GEditor->PlayWorld == nullptr;
+	return GEditor->PlayWorld == nullptr || bCanEditInPIE;
 }
 
 bool SFlowGraphEditor::IsPIE()
@@ -536,7 +549,7 @@ void SFlowGraphEditor::DeleteSelectedNodes()
 {
 	const FScopedTransaction Transaction(LOCTEXT("DeleteSelectedNode", "Delete Selected Node"));
 	GetCurrentGraph()->Modify();
-	UFlowAsset* FlowAssetPtr =FlowAsset.Get();
+	UFlowAsset* FlowAssetPtr = FlowAsset.Get();
 	FlowAssetPtr->Modify();
 
 	const FGraphPanelSelectionSet SelectedNodes = GetSelectedNodes();
@@ -737,7 +750,7 @@ void SFlowGraphEditor::PasteNodesHere(const FVector2f& Location)
 {
 	// Start the transaction and protect the graph update lock.
 	FScopedTransaction Transaction(LOCTEXT("PasteNode", "Paste Node"));
-	UFlowAsset* FlowAssetPtr =FlowAsset.Get();
+	UFlowAsset* FlowAssetPtr = FlowAsset.Get();
 	UFlowGraph* FlowGraph = CastChecked<UFlowGraph>(FlowAssetPtr->GetGraph());
 	FlowGraph->Modify();
 	FlowAssetPtr->Modify();
@@ -912,7 +925,7 @@ void SFlowGraphEditor::PreparePastedNodesForPaste(const TSet<UEdGraphNode*>& Nod
 		AverageNodePosition.Y *= InverseNodeCount;
 	}
 
-	UFlowAsset* FlowAssetPtr =FlowAsset.Get();
+	UFlowAsset* FlowAssetPtr = FlowAsset.Get();
 	for (UEdGraphNode* PastedNode : NodesToPaste)
 	{
 		UFlowGraphNode* PastedFlowGraphNode = Cast<UFlowGraphNode>(PastedNode);
@@ -1637,6 +1650,79 @@ void SFlowGraphEditor::OnForcePinActivation()
 			GraphNode->ForcePinActivation(Pin);
 		}
 	}
+}
+
+void SFlowGraphEditor::FastForwardToHere() const
+{
+	const TArray<UFlowGraphNode*> SelectedNodes = GetSelectedFlowNodes();
+	const UFlowNode* FlowNode = SelectedNodes.Num() == 1 ? Cast<UFlowNode>(SelectedNodes[0]->GetFlowNodeBase()) : nullptr;
+
+	if (FlowNode)
+	{
+		// Node of a graph not instanced yet is searched by its template
+		const UFlowNode* InspectedNode = FlowNode->GetInspectedInstance();
+		const UFlowNode* TargetNode = InspectedNode ? InspectedNode : FlowNode;
+
+		UFlowSubsystem* FlowSubsystem = nullptr;
+		if (InspectedNode)
+		{
+			FlowSubsystem = InspectedNode->GetFlowAsset()->GetFlowSubsystem();
+		}
+		else if (GEditor->PlayWorld && GEditor->PlayWorld->GetGameInstance())
+		{
+			FlowSubsystem = GEditor->PlayWorld->GetGameInstance()->GetSubsystem<UFlowSubsystem>();
+		}
+
+		UFlowFastForwardSubsystem* FastForwardSubsystem = FlowSubsystem ? FlowSubsystem->GetGameInstance()->GetSubsystem<UFlowFastForwardSubsystem>() : nullptr;
+		if (FastForwardSubsystem)
+		{
+			FFlowFastForwardRoute Route;
+			FFlowFastForwardRouteFinder RouteFinder(*FlowSubsystem);
+
+			FText FailureReason;
+			switch (RouteFinder.FindRoute(*TargetNode, Route))
+			{
+				case EFlowFastForwardRouteResult::Found:
+				{
+					// Editor UI runs with the editor world as GWorld.
+					// Without this, soft pointers would resolve to editor objects and actors would spawn in the editor world.
+					FScopedConditionalWorldSwitcher WorldSwitcher(FlowSubsystem->GetWorld());
+					FastForwardSubsystem->StartFastForward(Route);
+					break;
+				}
+				case EFlowFastForwardRouteResult::TargetAlreadyActive:
+					FailureReason = LOCTEXT("FastForwardToHere_TargetAlreadyActive", "Fast Forward to Here: node is already active.");
+					break;
+				case EFlowFastForwardRouteResult::NoActiveNodeOnRoute:
+					FailureReason = LOCTEXT("FastForwardToHere_NoActiveNodeOnRoute", "Fast Forward to Here: no active node leads to this node.");
+					break;
+				case EFlowFastForwardRouteResult::InvalidTarget:
+					FailureReason = LOCTEXT("FastForwardToHere_InvalidTarget", "Fast Forward to Here: node doesn't belong to a running graph or a graph it can instance.");
+					break;
+				default: ;
+			}
+
+			if (!FailureReason.IsEmpty())
+			{
+				FNotificationInfo Info(FailureReason);
+				Info.ExpireDuration = 3.0f;
+				Info.bUseLargeFont = false;
+				FSlateNotificationManager::Get().AddNotification(Info);
+			}
+		}
+	}
+}
+
+bool SFlowGraphEditor::CanFastForwardToHere() const
+{
+	const TArray<UFlowGraphNode*> SelectedNodes = GetSelectedFlowNodes();
+	const UFlowNode* FlowNode = SelectedNodes.Num() == 1 ? Cast<UFlowNode>(SelectedNodes[0]->GetFlowNodeBase()) : nullptr;
+
+	// Node of a graph not instanced yet has no activation state
+	const UFlowNode* InspectedNode = FlowNode ? FlowNode->GetInspectedInstance() : nullptr;
+	const bool bNeverActivated = InspectedNode == nullptr || InspectedNode->GetActivationState() == EFlowNodeState::NeverActivated;
+
+	return IsPIE() && FlowNode && bNeverActivated;
 }
 
 void SFlowGraphEditor::FocusViewport() const

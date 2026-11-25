@@ -19,5 +19,7 @@ private:
 	TObjectPtr<UFlowComponent> FlowComponent;
 
 public:
+	virtual void PostInitializeComponents() override;
+
 	UFlowComponent* GetFlowComponent() const { return FlowComponent; }
 };

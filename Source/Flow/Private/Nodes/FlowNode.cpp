@@ -3,11 +3,11 @@
 
 #include "AddOns/FlowNodeAddOn.h"
 #include "FlowAsset.h"
-#include "FlowNodeReplication.h"
 #include "FlowSettings.h"
 #include "Interfaces/FlowExecutionGate.h"
 #include "Interfaces/FlowPreloadableInterface.h"
 #include "Interfaces/FlowNodeWithExternalDataPinSupplierInterface.h"
+#include "Interfaces/FlowFastForwardGate.h"
 #include "Policies/FlowPreloadHelper.h"
 #include "Policies/FlowPreloadPolicy.h"
 #include "Types/FlowAutoDataPinsWorkingData.h"
@@ -40,9 +40,6 @@ UFlowNode::UFlowNode()
 	Category = TEXT("Uncategorized");
 	NodeDisplayStyle = FlowNodeStyle::Default;
 #endif
-
-	InputPins = {DefaultInputPin};
-	OutputPins = {DefaultOutputPin};
 }
 
 bool UFlowNode::IsSupportedInputPinName(const FName& PinName) const
@@ -90,11 +87,6 @@ void UFlowNode::PostLoad()
 	// fix Class Default Object
 	FixNode(nullptr);
 #endif
-
-	if (!HasAnyFlags(RF_ArchetypeObject | RF_ClassDefaultObject))
-	{
-		FixupDataPinTypes();
-	}
 }
 
 void UFlowNode::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -1135,43 +1127,6 @@ bool UFlowNode::TryGetFlowDataPinSupplierDatasForPinName(const FName& PinName, T
 	return !InOutPinValueSupplierDatas.IsEmpty();
 }
 
-// #FlowDataPinLegacy
-void UFlowNode::FixupDataPinTypes()
-{
-	FixupDataPinTypesForArray(InputPins);
-	FixupDataPinTypesForArray(OutputPins);
-#if WITH_EDITOR
-	FixupDataPinTypesForArray(AutoInputDataPins);
-	FixupDataPinTypesForArray(AutoOutputDataPins);
-#endif
-}
-
-void UFlowNode::FixupDataPinTypesForArray(TArray<FFlowPin>& MutableDataPinArray)
-{
-	for (FFlowPin& MutableFlowPin : MutableDataPinArray)
-	{
-		FixupDataPinTypesForPin(MutableFlowPin);
-	}
-}
-
-void UFlowNode::FixupDataPinTypesForPin(FFlowPin& MutableDataPin)
-{
-	const FFlowPinTypeName NewPinTypeName = FFlowPin::GetPinTypeNameForLegacyPinType(MutableDataPin.PinType);
-
-	if (!NewPinTypeName.IsNone())
-	{
-		MutableDataPin.SetPinTypeName(NewPinTypeName);
-	}
-
-	if (MutableDataPin.GetPinTypeName().IsNone())
-	{
-		// Ensure we have a pin type even if the enum was invalid before
-		MutableDataPin.SetPinTypeName(FFlowPinType_Exec::GetPinTypeNameStatic());
-	}
-
-	MutableDataPin.PinType = EFlowPinType::Invalid;
-}
-// --
 
 #if WITH_EDITOR
 EDataValidationResult UFlowNode::ValidateNode()
@@ -1214,8 +1169,6 @@ void UFlowNode::InitializeInstance()
 	Super::InitializeInstance();
 
 	TryInitializePreloadHelper();
-
-	bHasReplicatedProperties = ShouldReplicateProperties() && FlowNodeReplication::HasReplicatedProperties(*this);
 }
 
 void UFlowNode::DeinitializeInstance()
@@ -1256,6 +1209,39 @@ void UFlowNode::ExecuteInput(const FName& PinName)
 	}
 
 	Super::ExecuteInput(PinName);
+}
+
+void UFlowNode::TriggerFastForwardInput(const FName& PinName, const FName& OutputPinName)
+{
+	PendingFastForwardOutputPinName = OutputPinName;
+
+	FastForwardInput(PinName, OutputPinName);
+
+	// Signal won't reach the next node of the route, whichever implementation of FastForwardInput finished the node
+	if (IsFastForwardOutputPending(OutputPinName) && HasFinished())
+	{
+		LogWarning(FString::Printf(TEXT("Fast Forward stopped, node finished without triggering output %s"), *OutputPinName.ToString()));
+		FFlowFastForwardGate::ReportBrokenRoute(*this, OutputPinName);
+	}
+
+	PendingFastForwardOutputPinName = NAME_None;
+}
+
+void UFlowNode::FastForwardInput(const FName& PinName, const FName& OutputPinName)
+{
+	// Active node starting the route received its input before
+	if (!PinName.IsNone())
+	{
+		ExecuteInputForSelfAndAddOns(PinName);
+	}
+
+	// Node waits for something that doesn't happen while fast forwarding
+	// Finishing the node is up to its logic, as in the game, so the node stays active
+	if (IsFastForwardOutputPending(OutputPinName) && !HasFinished())
+	{
+		FFlowFastForwardGate::ReportForcedOutput(*this, OutputPinName);
+		TriggerOutput(OutputPinName);
+	}
 }
 
 void UFlowNode::SetActivationState(const EFlowNodeState NewActivationState)
@@ -1309,10 +1295,20 @@ void UFlowNode::TriggerInput(const FName& PinName, const EFlowPinActivationType 
 	}
 #endif
 
+	FName FastForwardOutputPinName = NAME_None;
+	const bool bFastForwardInput = FFlowFastForwardGate::ShouldFastForwardInput(*this, PinName, FastForwardOutputPinName);
+
 	switch (SignalMode)
 	{
 		case EFlowSignalMode::Enabled:
-			ExecuteInputForSelfAndAddOns(PinName);
+			if (bFastForwardInput)
+			{
+				TriggerFastForwardInput(PinName, FastForwardOutputPinName);
+			}
+			else
+			{
+				ExecuteInputForSelfAndAddOns(PinName);
+			}
 			break;
 		case EFlowSignalMode::Disabled:
 			if (GetDefault<UFlowSettings>()->bLogOnSignalDisabled)
@@ -1369,6 +1365,11 @@ void UFlowNode::TriggerOutput(const FName PinName, const bool bFinish /*= false*
 		// do not trigger output if node is already finished or aborted
 		LogError(TEXT("Trying to TriggerOutput after finished or aborted"), EFlowOnScreenMessageType::Disabled);
 		return;
+	}
+
+	if (PinName == PendingFastForwardOutputPinName)
+	{
+		PendingFastForwardOutputPinName = NAME_None;
 	}
 
 	// clean up node, if needed
